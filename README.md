@@ -3,9 +3,9 @@
 A small, learning-focused repository that demonstrates how Google Agent Development Kit
 (ADK) can orchestrate multiple LLM agents to evaluate and improve a user prompt.
 
-This repository intentionally starts as a documentation-first skeleton. The agent workflow
-has not been implemented yet, so each ADK concept can be added and verified one step at a
-time.
+The first executable milestone contains a single structured `prompt_analyzer`. The evaluator
+fan-out and final reviewer remain intentionally unimplemented so each ADK concept can be added
+and verified one step at a time.
 
 ## Learning goals
 
@@ -62,11 +62,14 @@ Python projects.
 |-- README.md
 |-- prompt_improver/
 |   |-- __init__.py
+|   |-- __main__.py    # Enables: python -m prompt_improver
 |   |-- agent.py       # Agent definitions and root workflow
+|   |-- cli.py         # Minimal Runner and in-memory Session example
 |   |-- schemas.py     # Pydantic contracts between workflow steps
 |   `-- callbacks.py   # Optional trace callbacks; no business logic
 `-- tests/
-    `-- README.md      # Planned deterministic tests
+    |-- test_runner.py  # Local App/Runner/Session smoke test
+    `-- test_schemas.py # Deterministic schema tests
 ```
 
 Keeping the whole agent topology in one `agent.py` initially makes the execution flow easier
@@ -149,10 +152,18 @@ dependency in `pyproject.toml` if the project is no longer on ADK 2.x.
 Add the three Pydantic models described above. Write fast tests for score boundaries and
 required fields. This provides stable contracts before prompts and orchestration are added.
 
+Status: implemented.
+
 ### Step 3: implement one analyzer
 
 Create one `LlmAgent` that accepts the original prompt and returns `PromptAnalysis`. Run it by
 itself and inspect both the final event and parsed structured output.
+
+Status: implemented. After configuring `.env`, run:
+
+```powershell
+python -m prompt_improver "Explain Google ADK"
+```
 
 ### Step 4: implement one evaluator
 
@@ -236,4 +247,3 @@ primarily a demonstration of ADK orchestration and structured agent collaboratio
 - [Runner and runtime](https://adk.dev/runtime/)
 - [Sessions and state](https://adk.dev/sessions/)
 - [Callbacks](https://adk.dev/callbacks/)
-

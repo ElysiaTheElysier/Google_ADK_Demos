@@ -1,24 +1,34 @@
 # Google ADK Prompt Improver
 
-Demo trực quan giúp tìm hiểu cách **Google Agent Development Kit (ADK)** điều phối nhiều AI Agent (fan-out / fan-in workflow, custom search tool, và browser automation tool) để **phân tích, bổ sung ngữ cảnh, chấm điểm, cải thiện và kiểm thử chéo (validate)** một prompt.
+An interactive demo showcasing how the **Google Agent Development Kit (ADK)** orchestrates multi-agent workflows, custom web search tools, and browser automation tools to **analyze, enrich, score, improve, and externally validate** user prompts.
 
 ![Prompt Inspector UI](docs/images/prompt-inspector.png)
 
 ---
 
-## Kiến trúc tổng thể (3 Giai đoạn)
+## Architecture & Completed Phases
 
-Hệ thống giữ nguyên một **core evaluation workflow** rõ ràng và tách biệt hai capability tùy chọn bên ngoài để người dùng chủ động kích hoạt khi cần:
+The project keeps a clean, deterministic **core evaluation workflow** while exposing two optional user-triggered capabilities outside the core graph:
 
 ```text
-                    ┌─ 1. Enrich Context ───────► context_enrichment_agent ──► search_web (Wikipedia + DuckDuckGo)
+                    ┌─ Phase 2: Enrich Context ───► context_enrichment_agent ──► search_web (Wikipedia + DuckDuckGo)
                     │
-User Prompt ────────┼─ 2. Run Evaluation ───────► ADK Graph Workflow (Analyzer -> 4 Evaluators -> Join -> Final Reviewer)
+User Prompt ────────┼─ Phase 1: Run Evaluation ───► ADK Graph Workflow (Analyzer -> 4 Evaluators -> Join -> Final Reviewer)
                     │
-                    └─ 3. Validate Result ──────► promptify_validator_agent ─► validate_with_promptify (Playwright)
+                    └─ Phase 3: Validate Result ──► promptify_validator_agent ─► validate_with_promptify (Playwright)
 ```
 
-### Giai đoạn 1: Core Evaluation Workflow (Fan-out / Fan-in)
+### Summary of Completed Phases
+
+| Phase | Status | What Was Built |
+| :--- | :--- | :--- |
+| **Phase 1: Core Evaluation & Scoring Stability** | ✅ Completed | Fan-out / fan-in ADK `Workflow` (`Prompt Analyzer` $\rightarrow$ 4 parallel Evaluators $\rightarrow$ `JoinNode` $\rightarrow$ `Final Reviewer`), standardized 1–5 scoring rubrics, configurable `Temperature` (`0.0` default), deterministic Python `overall_score` calculation, and automatic **OpenAI fallback** on Gemini `503`/`429`/timeout. |
+| **Phase 2: Context Enrichment (Search Tool)** | ✅ Completed | Standalone `context_enrichment_agent` equipped with custom `search_web` tool (Wikipedia REST API + DuckDuckGo fallback). Identifies missing context, retrieves factual snippets + source URLs, and lets the user selectively click **Apply context** (human-in-the-loop) before evaluation. Also supports optional inline graph enrichment (`search_public_context`). |
+| **Phase 3: External Validation with Promptify (Browser Tool)** | ✅ Completed | Standalone `promptify_validator_agent` equipped with `validate_with_promptify` (Playwright persistent Chromium session). Supports human-in-the-loop Google OAuth login with automatic continuation, navigates through Promptify's class/roadmap/lesson views, dismisses walkthrough overlays, selects the target Lab, submits the `improved_prompt`, and extracts the external score (`/100`) and feedback into the UI. |
+
+---
+
+### Phase 1: Core Evaluation Workflow (Fan-out / Fan-in)
 
 ```text
 User Prompt
@@ -27,7 +37,7 @@ User Prompt
 Prompt Analyzer
     |
     +--------------+---------------+----------------+----------------+
-    |              |               |                |                | (tùy chọn)
+    |              |               |                |                | (optional)
     v              v               v                v                v
  Clarity        Context        Constraints      Output Format    Context Enricher
  Evaluator      Evaluator      Evaluator        Evaluator        (search_public_context)
@@ -44,132 +54,132 @@ Prompt Analyzer
                        Scores + Improved Prompt
 ```
 
-- **Bốn Evaluator chạy song song**: Thời gian chạy của cả cụm xấp xỉ với evaluator chậm nhất chứ không phải tổng thời gian của 4 agent.
-- **Ổn định điểm số (Scoring Consistency)**:
-  - Thanh trượt `Temperature` từ `0.0` đến `1.0` (mặc định `0.0` để giảm dao động tối đa).
-  - Rubric chấm điểm chuẩn hóa từ `1` đến `5` cho cả 4 tiêu chí (`Clarity`, `Context`, `Constraints`, `Output Format`).
-  - `overall_score` luôn được Python tính trung bình cộng chính xác từ 4 điểm thành phần, không để LLM tự ước lượng.
+- **Parallel Evaluators**: Four specialized evaluators (`Clarity`, `Context`, `Constraints`, `Output Format`) run concurrently, so stage latency tracks the slowest branch rather than the sum of all four.
+- **Scoring Consistency**:
+  - Configurable `Temperature` slider (`0.0` to `1.0`, defaulting to `0.0`).
+  - Explicit 1–5 anchor rubrics across all four criteria.
+  - `overall_score` is computed deterministically in Python as the exact mean of the four criterion scores.
 
-### Giai đoạn 2: Context Enrichment (Web Search Tool)
+### Phase 2: Context Enrichment (`search_web` Tool)
 
-- Nút **Enrich context** ngay cạnh **Run evaluation** gọi `context_enrichment_agent` kèm custom tool `search_web(query)` (kết hợp Wikipedia REST API và DuckDuckGo).
-- Trả về:
-  - `missing_context`: những thông tin còn thiếu trong prompt gốc.
-  - `search_query`: câu truy vấn agent đã dùng.
-  - `suggested_context`: danh sách các ý ngữ cảnh gợi ý kèm checkbox.
-  - `sources`: nguồn trích dẫn có tiêu đề và link cụ thể.
-- **Human-in-the-loop**: Không tự ý sửa prompt của người dùng — người dùng tự chọn các ý muốn lấy và bấm **Apply context** để ghép vào trình soạn thảo.
+- Clicking **Enrich context** invokes `context_enrichment_agent`, which calls `search_web(query)` to fetch public facts from Wikipedia and DuckDuckGo.
+- Returns structured `ContextEnrichmentResult`:
+  - `missing_context`: Gaps identified in the user's draft prompt.
+  - `search_query`: The query executed by the agent.
+  - `suggested_context`: Actionable context bullets the user can toggle on/off.
+  - `sources`: Cited titles, URLs, and snippets.
+- **Human-in-the-loop**: Suggestions are only appended to the prompt editor when the user clicks **Apply context**.
 
-### Giai đoạn 3: External Validation với Promptify (Browser Automation Tool)
+### Phase 3: External Validation with Promptify (`validate_with_promptify` Tool)
 
-- Sau khi có `improved_prompt`, khu vực **External Validation** cho phép chọn chủ đề bài thực hành (Lab 1–5) và bấm **Validate with Promptify**.
-- `promptify_validator_agent` gọi tool `validate_with_promptify(prompt, topic)` điều khiển trình duyệt Chromium thông qua **Playwright**:
-  - Lưu session đăng nhập trong thư mục `.promptify_browser_profile/` để không phải đăng nhập lại mỗi lần chạy.
-  - Nếu chưa đăng nhập Google trên [Promptify](https://promptify-wheat-seven.vercel.app/), trình duyệt tự mở màn hình đăng nhập và đợi người dùng xác nhận tài khoản Google (tối đa 90 giây), sau đó **tự động đi tiếp** ngay trong lượt chạy đó.
-  - Tự động điều hướng qua các màn hình của Promptify (**Chọn lớp học** $\rightarrow$ **Lộ trình học** $\rightarrow$ **Màn hình bài thực hành**), bỏ qua popup hướng dẫn, chọn đúng bài Lab, điền `improved_prompt`, bấm **Chấm điểm Prompt** và trích xuất điểm số (`/100`) cùng nhận xét chi tiết về lại giao diện UI.
+- Once an `improved_prompt` is generated, the **External Validation** panel enables **Validate with Promptify**.
+- `promptify_validator_agent` invokes `validate_with_promptify(prompt, topic)` powered by **Playwright**:
+  - Uses a persistent Chromium profile (`.promptify_browser_profile/`) so Google login sessions are preserved across runs.
+  - If unauthenticated on [Promptify](https://promptify-wheat-seven.vercel.app/), opens Google login and waits up to 90 seconds for the user to sign in, then **automatically continues** in the same run.
+  - Navigates through Promptify's **Class Selection** $\rightarrow$ **Dashboard** $\rightarrow$ **Learning Path** $\rightarrow$ **Lesson Workspace**, dismisses guided tutorial overlays, selects the matching Lab, fills in the `improved_prompt`, clicks **Chấm điểm Prompt**, and scrapes the `/100` score and detailed feedback back into the UI.
 
-### Tự động Fallback sang OpenAI khi Gemini quá tải
+### Automatic OpenAI Fallback
 
-- Nếu Google Gemini trả lỗi `503 UNAVAILABLE` (high demand), `429 RESOURCE_EXHAUSTED` (rate limit), hoặc treo quá `ADK_EVENT_TIMEOUT_SECONDS`, backend sẽ tự động chuyển toàn bộ lượt chạy sang OpenAI (`OPENAI_MODEL`) qua LiteLLM nếu bạn đã cấu hình `OPENAI_API_KEY`.
-
----
-
-## Thành phần ADK được sử dụng
-
-| Thành phần | Vai trò trong dự án |
-| --- | --- |
-| `LlmAgent` | Định nghĩa `prompt_analyzer`, 4 evaluator, `final_reviewer`, `context_enrichment_agent`, và `promptify_validator_agent` |
-| `Workflow` | Khai báo đồ thị thực thi fan-out (rẽ nhánh song song) và fan-in (gộp nhánh) |
-| `JoinNode` | Đợi tất cả các nhánh song song hoàn tất trước khi gọi `final_reviewer` |
-| `Runner` | Thực thi agent/workflow và phát luồng sự kiện (`Event`) theo thời gian thực |
-| `Session` | Lưu trữ trạng thái (`session.state`) xuyên suốt một lần chạy |
-| `output_key` | Tự động ghi kết quả structured output của agent vào `session.state` cho bước sau đọc |
-| `output_schema` | Ép đầu ra của từng agent tuân thủ chặt chẽ Pydantic schema |
-| Custom Tools | Các hàm Python (`search_web`, `search_public_context`, `validate_with_promptify`) được ADK tự động đọc chữ ký và docstring để LLM gọi |
+- When Gemini returns `503 UNAVAILABLE` (high demand), `429 RESOURCE_EXHAUSTED` (rate limit), or stalls past `ADK_EVENT_TIMEOUT_SECONDS`, the backend automatically cancels the stalled attempt and re-runs the request with OpenAI (`OPENAI_MODEL`) via LiteLLM if `OPENAI_API_KEY` is configured.
 
 ---
 
-## Cấu trúc thư mục
+## Key Google ADK Concepts Demonstrated
+
+| ADK Component | Role in This Project |
+| :--- | :--- |
+| `LlmAgent` | Defines `prompt_analyzer`, 4 criterion evaluators, `final_reviewer`, `context_enrichment_agent`, and `promptify_validator_agent` |
+| `Workflow` | Declares the fan-out (parallel evaluation) and fan-in graph |
+| `JoinNode` | Synchronizes all parallel branches before invoking `final_reviewer` |
+| `Runner` | Executes agents/workflows and streams real-time execution `Event`s |
+| `Session` | Holds invocation state (`session.state`) within a single run |
+| `output_key` | Persists structured agent outputs into `session.state` for downstream agents |
+| `output_schema` | Enforces strict Pydantic schemas (`PromptAnalysis`, `CriterionEvaluation`, `FinalResult`, `ContextEnrichmentResult`, `ExternalValidationResult`) |
+| Custom Function Tools | Standard Python functions (`search_web`, `search_public_context`, `validate_with_promptify`) exposed as ADK tools via type annotations and docstrings |
+
+---
+
+## Repository Structure
 
 ```text
 .
 |-- prompt_improver/
-|   |-- agent.py          # Định nghĩa các LlmAgent và ADK Graph Workflow
-|   |-- schemas.py        # Pydantic schemas (PromptAnalysis, FinalResult, ContextEnrichmentResult, ExternalValidationResult...)
+|   |-- agent.py          # LlmAgent definitions and ADK Graph Workflows
+|   |-- schemas.py        # Pydantic schemas for all phases
 |   |-- tools.py          # Custom tools: search_web, search_public_context, validate_with_promptify (Playwright)
-|   |-- cli.py            # Chạy thử workflow trực tiếp bằng dòng lệnh (CLI)
-|   `-- callbacks.py      # Telemetry callbacks theo dõi quá trình chạy
+|   |-- cli.py            # Minimal CLI runner
+|   `-- callbacks.py      # Telemetry callbacks
 |-- frontend/
-|   |-- src/App.tsx       # Giao diện React + SSE streaming state
-|   |-- src/styles.css    # Giao diện trực quan (Workflow Graph, Inspector, Trace Console)
-|   `-- package.json      # Cấu hình dependencies frontend (Vite + React + TypeScript)
-|-- ui_backend.py         # FastAPI server + SSE streaming cho Evaluate, Enrich, và Validate
-|-- requirements-ui.txt   # Các thư viện bổ sung cho UI backend, LiteLLM và Playwright
-|-- tests/                # Bộ unit tests kiểm tra schemas, tools và workflow
-|-- pyproject.toml        # Cấu hình package Python gốc
-`-- .env.example          # File mẫu cấu hình biến môi trường
+|   |-- src/App.tsx       # React UI with live SSE workflow & tool state
+|   |-- src/styles.css    # Visual styling (Workflow Inspector, Trace Console, Validation Panel)
+|   `-- package.json      # Vite + React + TypeScript dependencies
+|-- ui_backend.py         # FastAPI backend + SSE streaming for Evaluate, Enrich, and Validate
+|-- requirements-ui.txt   # UI backend, LiteLLM, and Playwright dependencies
+|-- tests/                # Pytest unit tests for schemas, tools, and workflow structure
+|-- pyproject.toml        # Core Python package configuration
+`-- .env.example          # Environment variable template
 ```
 
 ---
 
-## Hướng dẫn cài đặt và chạy dự án (Từ A-Z)
+## Getting Started (Step-by-Step Setup)
 
-### Yêu cầu hệ thống
+### Prerequisites
 
 - **Python 3.11+**
 - **Node.js 20+**
-- **Google Gemini API Key** (lấy miễn phí tại [Google AI Studio](https://aistudio.google.com/))
-- **OpenAI API Key** *(tùy chọn, khuyên dùng để tự động dự phòng khi server Gemini bị quá tải 503)*
+- **Google Gemini API Key** (from [Google AI Studio](https://aistudio.google.com/))
+- **OpenAI API Key** *(optional, recommended for automatic fallback when Gemini experiences 503 high demand)*
 
-### Bước 1: Clone repo và cài đặt môi trường Python
+### 1. Clone the Repository & Set Up Python Environment
 
-Mở **PowerShell** tại thư mục bạn muốn lưu dự án:
+Open **PowerShell** in your workspace directory:
 
 ```powershell
 git clone https://github.com/ElysiaTheElysier/Google_ADK_Demos.git
 cd Google_ADK_Demos
 
-# Tạo môi trường ảo (virtual environment)
+# Create virtual environment
 python -m venv .venv
 
-# Kích hoạt môi trường ảo
-# (Nếu PowerShell báo lỗi chặn script, chạy lệnh dưới trước):
+# Activate virtual environment
+# (If PowerShell blocks script execution, run the bypass command first):
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 
-# Cài đặt các thư viện Python và trình duyệt Chromium cho Playwright
+# Install Python packages and Playwright Chromium browser
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 python -m pip install -r requirements-ui.txt
 playwright install chromium
 ```
 
-### Bước 2: Cấu hình file `.env`
+### 2. Configure Environment Variables (`.env`)
 
-Tạo file `.env` từ file mẫu `.env.example`:
+Copy `.env.example` to `.env`:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Mở file `.env` và điền API key của bạn:
+Edit `.env` and fill in your keys:
 
 ```env
-# Bắt buộc: Google AI Studio API Key
+# Required: Google AI Studio API Key
 GOOGLE_API_KEY=your-google-api-key
 GOOGLE_GENAI_USE_VERTEXAI=FALSE
 ADK_MODEL=gemini-3.5-flash-lite
 
-# Tùy chọn: Tự động chuyển sang OpenAI khi Gemini bị quá tải (503/429) hoặc timeout
+# Optional: Automatic fallback when Gemini returns 503/429 or times out
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=openai/gpt-4.1-mini
 ADK_EVENT_TIMEOUT_SECONDS=60
 
-# URL ứng dụng Promptify cho tính năng Validate ở Giai đoạn 3
+# Optional: Target URL for Phase 3 External Validation
 PROMPTIFY_URL=https://promptify-wheat-seven.vercel.app/
 ```
 
-### Bước 3: Cài đặt thư viện cho Frontend
+### 3. Install Frontend Dependencies
 
 ```powershell
 cd frontend
@@ -177,55 +187,54 @@ npm install
 cd ..
 ```
 
-### Bước 4: Khởi chạy hệ thống (Backend + Frontend)
+### 4. Run Backend & Frontend
 
-Bạn mở **2 cửa sổ terminal PowerShell** song song:
+Open **two PowerShell terminals** side by side:
 
-**Terminal 1 — Chạy Backend (cổng `8000`):**
+**Terminal 1 — Start Backend (`http://localhost:8000`):**
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
 .\.venv\Scripts\uvicorn.exe ui_backend:app --reload --host 127.0.0.1 --port 8000
 ```
 
-*(Kiểm tra nhanh tại `http://localhost:8000/api/health` sẽ thấy `{"status":"ok"}`)*
+*(Verify at `http://localhost:8000/api/health` $\rightarrow$ `{"status":"ok"}`)*
 
-**Terminal 2 — Chạy Frontend (cổng `5173`):**
+**Terminal 2 — Start Frontend (`http://localhost:5173`):**
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-Sau đó mở trình duyệt tại địa chỉ: **[http://localhost:5173](http://localhost:5173)**
+Open **[http://localhost:5173](http://localhost:5173)** in your browser.
 
 ---
 
-## Cách sử dụng nhanh trên giao diện Web
+## How to Use the UI
 
-1. **Bước 1 — Nhập & Làm giàu ngữ cảnh (Build Prompt)**:
-   - Nhập một câu prompt bất kỳ (hoặc chọn các nút **Sample** có sẵn).
-   - Bấm **Enrich context** để Agent tự tìm thông tin thực tế trên Wikipedia/Web. Tích chọn các ý bạn muốn thêm rồi bấm **Apply context**.
-2. **Bước 2 — Đánh giá & Cải thiện (Evaluate Prompt)**:
-   - Chọn mức `Temperature` (nên để `0.0` để điểm ổn định nhất) và bấm **Run evaluation**.
-   - Quan sát đồ thị **Workflow Inspector** sáng đèn theo thời gian thực. Bấm vào từng node để xem Input/Output JSON, thời gian chạy và lượng token tiêu thụ.
-   - Xem điểm tổng kết và bản **Improved Prompt** ở khung kết quả.
-3. **Bước 3 — Kiểm thử chéo với Promptify (External Validation)**:
-   - Sau khi đã có **Improved Prompt**, kéo xuống mục **External Validation**, chọn bài Lab tương ứng và bấm **Validate with Promptify**.
-   - Lần đầu tiên chạy, một cửa sổ Chromium sẽ bật lên: bạn chỉ cần đăng nhập tài khoản Google trên trang Promptify. Ngay sau khi đăng nhập xong, Agent sẽ tự động vào lớp học, mở bài thực hành, dán prompt đã cải thiện, bấm chấm điểm và mang kết quả điểm (`/100`) + nhận xét về lại trang web của bạn.
+1. **Build & Enrich Prompt (Phase 2)**:
+   - Enter a prompt or pick a sample chip.
+   - Click **Enrich context** to let `context_enrichment_agent` search Wikipedia/Web for relevant facts. Select the checkboxes you want to keep and click **Apply context**.
+2. **Evaluate & Improve Prompt (Phase 1)**:
+   - Choose a `Temperature` (`0.0` recommended for deterministic scoring) and click **Run evaluation**.
+   - Inspect live node execution in the **Workflow Inspector**, view parallel timing bars, and review the **Improved Prompt**.
+3. **Validate with Promptify (Phase 3)**:
+   - In the **External Validation** section, pick a target Lab topic and click **Validate with Promptify**.
+   - On the first run, a Chromium window will open for Google Sign-In. Once signed in, Playwright automatically navigates to the lesson workspace, submits your improved prompt, and returns the external `/100` score and feedback to the UI.
 
 ---
 
-## Chạy thử bằng CLI hoặc chạy Kiểm thử (Unit Tests)
+## CLI & Testing
 
-Chạy đánh giá nhanh qua dòng lệnh (không cần bật UI):
+Run the core workflow from the command line without the UI:
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
-.\.venv\Scripts\python.exe -m prompt_improver "Giải thích Google ADK cho một lập trình viên mới"
+.\.venv\Scripts\python.exe -m prompt_improver "Explain Google ADK to a junior developer"
 ```
 
-Chạy bộ kiểm thử tự động (`pytest`) và kiểm tra code style (`ruff`):
+Run linter and unit tests:
 
 ```powershell
 $env:PYTHONIOENCODING="utf-8"
@@ -235,18 +244,7 @@ $env:PYTHONIOENCODING="utf-8"
 
 ---
 
-## Xử lý sự cố thường gặp (Troubleshooting)
-
-- **Lỗi `503 UNAVAILABLE (currently experiencing high demand)` từ Google Gemini**:
-  - Đây là lỗi phía máy chủ miễn phí của Google khi có nhiều người truy cập cùng lúc. Bạn chỉ cần điền thêm `OPENAI_API_KEY` vào file `.env`, hệ thống sẽ tự động chuyển sang OpenAI ngay lập tức mà không làm gián đoạn quá trình chạy.
-- **Lỡ tay đóng cửa sổ trình duyệt Promptify khi đang chạy**:
-  - Không sao cả! Hệ thống tự động phát hiện cửa sổ đã đóng, dọn dẹp khóa profile (`SingletonLock`) và mở lại cửa sổ mới ở lần bấm **Validate with Promptify** tiếp theo.
-- **Giao diện không cập nhật sau khi sửa code**:
-  - Nhấn tổ hợp phím `Ctrl + Shift + R` trên trình duyệt để xóa cache cũ.
-
----
-
-## Tài liệu tham khảo
+## References
 
 - [Google ADK Documentation](https://adk.dev/)
 - [ADK Graph Workflows](https://adk.dev/graphs/)

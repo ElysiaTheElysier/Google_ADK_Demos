@@ -1,9 +1,10 @@
-"""Minimal programmatic Runner example for the prompt analyzer."""
+"""Minimal programmatic Runner for the complete prompt-improvement workflow."""
 
 import argparse
 import asyncio
 import json
 import os
+import sys
 import uuid
 
 from google.adk.apps import App
@@ -11,7 +12,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from .agent import root_agent
-from .schemas import PromptAnalysis
+from .schemas import FinalResult
 
 APP_NAME = "prompt_improver"
 USER_ID = "demo_user"
@@ -29,8 +30,8 @@ def _ensure_authentication() -> None:
         )
 
 
-async def analyze_prompt(prompt: str) -> PromptAnalysis:
-    """Run one analyzer turn and parse its final structured response."""
+async def improve_prompt(prompt: str) -> FinalResult:
+    """Run the complete workflow and parse its final structured response."""
 
     if not prompt.strip():
         raise ValueError("Prompt must not be empty.")
@@ -63,17 +64,21 @@ async def analyze_prompt(prompt: str) -> PromptAnalysis:
                 final_text = "".join(text_parts)
 
     if final_text is None:
-        raise RuntimeError("The analyzer completed without a final text response.")
+        raise RuntimeError("The workflow completed without a final text response.")
 
-    return PromptAnalysis.model_validate_json(final_text)
+    return FinalResult.model_validate_json(final_text)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze one prompt with Google ADK.")
-    parser.add_argument("prompt", help="The prompt to analyze, wrapped in quotes.")
+    # Windows may default to a legacy console encoding that cannot print Vietnamese output.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    parser = argparse.ArgumentParser(description="Evaluate and improve one prompt with ADK.")
+    parser.add_argument("prompt", help="The prompt to improve, wrapped in quotes.")
     args = parser.parse_args()
 
-    result = asyncio.run(analyze_prompt(args.prompt))
+    result = asyncio.run(improve_prompt(args.prompt))
     print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
 
 

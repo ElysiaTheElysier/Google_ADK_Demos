@@ -7,7 +7,10 @@ from prompt_improver.schemas import CriterionEvaluation, FinalResult, PromptAnal
 
 
 def test_prompt_analysis_defaults_optional_information() -> None:
-    analysis = PromptAnalysis(inferred_goal="Summarize a technical article")
+    analysis = PromptAnalysis(
+        original_prompt="Summarize this article.",
+        inferred_goal="Summarize a technical article",
+    )
 
     assert analysis.target_audience is None
     assert analysis.detected_context == []
@@ -47,17 +50,19 @@ def test_criterion_evaluation_limits_findings_to_three() -> None:
 
 
 def test_final_result_serialization_round_trip() -> None:
+    evaluations = [
+        CriterionEvaluation(
+            criterion=criterion,
+            score=3,
+            findings=["The criterion needs improvement."],
+            suggestions=["Add a concrete requirement."],
+        )
+        for criterion in ("clarity", "context", "constraints", "output_format")
+    ]
     result = FinalResult(
         overall_score=4.0,
         summary="The prompt is clear but needs an explicit output format.",
-        evaluations=[
-            CriterionEvaluation(
-                criterion="output_format",
-                score=3,
-                findings=["No output format is requested."],
-                suggestions=["Request a concise Markdown list."],
-            )
-        ],
+        evaluations=evaluations,
         improved_prompt="Summarize the article as five concise Markdown bullets.",
     )
 

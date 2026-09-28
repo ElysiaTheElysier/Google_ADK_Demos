@@ -3,9 +3,8 @@
 A small, learning-focused repository that demonstrates how Google Agent Development Kit
 (ADK) can orchestrate multiple LLM agents to evaluate and improve a user prompt.
 
-The first executable milestone contains a single structured `prompt_analyzer`. The evaluator
-fan-out and final reviewer remain intentionally unimplemented so each ADK concept can be added
-and verified one step at a time.
+The executable demo implements the complete workflow: structured analysis, four parallel
+evaluators, a fan-in join, and one final reviewer that produces an improved prompt.
 
 ## Learning goals
 
@@ -16,6 +15,9 @@ and verified one step at a time.
 - Learn the responsibilities of `Runner`, `Session`, state, events, and callbacks.
 
 The goal is not to build a production prompt-management platform or integrate with Promptify.
+
+The default model is `gemini-3.5-flash-lite` to keep this six-call demo lightweight. Override it
+with `ADK_MODEL` in `.env` when needed.
 
 ## Proposed v1 flow
 
@@ -159,10 +161,10 @@ Status: implemented.
 Create one `LlmAgent` that accepts the original prompt and returns `PromptAnalysis`. Run it by
 itself and inspect both the final event and parsed structured output.
 
-Status: implemented. After configuring `.env`, run:
+Status: implemented as part of the complete workflow. After configuring `.env`, run:
 
 ```powershell
-python -m prompt_improver "Explain Google ADK"
+python -m prompt_improver "Giải thích Google Agent Development Kit cho lập trình viên mới"
 ```
 
 ### Step 4: implement one evaluator
@@ -176,16 +178,22 @@ parallelism.
 Use the same output contract for context, constraints, and output format. Keep instructions
 short and criterion-specific.
 
+Status: implemented.
+
 ### Step 6: compose fan-out and fan-in
 
 Build the ADK graph so all evaluator nodes depend on the analyzer and the final reviewer depends
 on all evaluator branches. Do not have parallel branches write to the same state key.
+
+Status: implemented with `Workflow` and `JoinNode`.
 
 ### Step 7: add the final reviewer
 
 The final reviewer receives the original prompt, analysis, and all evaluations. It returns one
 `FinalResult`, preserving user intent and making missing information explicit as assumptions or
 placeholders.
+
+Status: implemented.
 
 ### Step 8: expose execution through Runner
 

@@ -22,23 +22,35 @@ def _ensure_authentication() -> None:
     """Fail early with an actionable message instead of a model-client error."""
 
     uses_vertex_ai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
-    has_api_key = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+    has_api_key = bool(
+        os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
     if not uses_vertex_ai and not has_api_key:
         raise RuntimeError(
-            "Missing GOOGLE_API_KEY or GEMINI_API_KEY. Copy .env.example to .env and "
-            "add your key, or configure Vertex AI authentication."
+            "Missing GOOGLE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY. Copy .env.example "
+            "to .env and add your key, or configure Vertex AI authentication."
         )
 
 
-async def improve_prompt(prompt: str) -> FinalResult:
-    """Run the complete workflow and parse its final structured response."""
+def _openai_fallback_workflow(workflow: object) -> tuple[object, str]:
+    """Clone the workflow graph and switch all LLM nodes to OpenAI via LiteLlm."""
+    from google.adk.models.lite_llm import LiteLlm
 
-    if not prompt.strip():
-        raise ValueError("Prompt must not be empty.")
+    model_name = os.getenv("OPENAI_MODEL", "openai/gpt-4.1-mini")
+    if not model_name.startswith("openai/"):
+        model_name = f"openai/{model_name}"
 
-    _ensure_authentication()
+    fallback_root = workflow.model_copy(deep=True)  # type: ignore[attr-defined]
+    for node in fallback_root.graph.nodes:
+        if hasattr(node, "model"):
+            node.model = LiteLlm(model=model_name)
+    return fallback_root, model_name
 
-    app = App(name=APP_NAME, root_agent=root_agent)
+
+async def _run_workflow_once(prompt: str, workflow: object) -> FinalResult:
+    app = App(name=APP_NAME, root_agent=workflow)  # type: ignore[arg-type]
     runner = InMemoryRunner(app=app)
     session = await runner.session_service.create_session(
         app_name=APP_NAME,
@@ -58,15 +70,44 @@ async def improve_prompt(prompt: str) -> FinalResult:
         new_message=message,
     ):
         print(f"[event] author={event.author} final={event.is_final_response()}")
-        if event.is_final_response() and event.content:
+        if event.author == "final_reviewer" and event.is_final_response() and event.content:
             text_parts = [part.text for part in event.content.parts or [] if part.text]
             if text_parts:
                 final_text = "".join(text_parts)
 
     if final_text is None:
+        updated_session = await runner.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=USER_ID,
+            session_id=session.id,
+        )
+        state_result = (updated_session.state or {}).get("final_result") if updated_session else None
+        if state_result is not None:
+            return FinalResult.model_validate(state_result)
         raise RuntimeError("The workflow completed without a final text response.")
 
     return FinalResult.model_validate_json(final_text)
+
+
+async def improve_prompt(prompt: str) -> FinalResult:
+    """Run the complete workflow and parse its final structured response."""
+
+    if not prompt.strip():
+        raise ValueError("Prompt must not be empty.")
+
+    _ensure_authentication()
+
+    try:
+        return await _run_workflow_once(prompt, root_agent)
+    except Exception as exc:
+        if not os.getenv("OPENAI_API_KEY"):
+            raise
+        fallback_workflow, fallback_model = _openai_fallback_workflow(root_agent)
+        print(
+            f"[fallback] Gemini failed ({exc}); retrying with {fallback_model}...",
+            file=sys.stderr,
+        )
+        return await _run_workflow_once(prompt, fallback_workflow)
 
 
 def main() -> None:

@@ -1,257 +1,255 @@
-# Google ADK Prompt Improver Demo
+# Google ADK Prompt Improver
 
-A small, learning-focused repository that demonstrates how Google Agent Development Kit
-(ADK) can orchestrate multiple LLM agents to evaluate and improve a user prompt.
+Demo trực quan giúp tìm hiểu cách **Google Agent Development Kit (ADK)** điều phối nhiều AI Agent (fan-out / fan-in workflow, custom search tool, và browser automation tool) để **phân tích, bổ sung ngữ cảnh, chấm điểm, cải thiện và kiểm thử chéo (validate)** một prompt.
 
-The executable demo implements the complete workflow: structured analysis, four parallel
-evaluators, a fan-in join, and one final reviewer that produces an improved prompt.
+![Prompt Inspector UI](docs/images/prompt-inspector.png)
 
-## Learning goals
+---
 
-- Understand the role of an `LlmAgent`.
-- See deterministic orchestration around non-deterministic LLM calls.
-- Observe fan-out evaluation and fan-in synthesis.
-- Follow data as it moves between workflow nodes.
-- Learn the responsibilities of `Runner`, `Session`, state, events, and callbacks.
+## Kiến trúc tổng thể (3 Giai đoạn)
 
-The goal is not to build a production prompt-management platform or integrate with Promptify.
-
-The default model is `gemini-3.5-flash-lite` to keep this six-call demo lightweight. Override it
-with `ADK_MODEL` in `.env` when needed.
-
-## Proposed v1 flow
+Hệ thống giữ nguyên một **core evaluation workflow** rõ ràng và tách biệt hai capability tùy chọn bên ngoài để người dùng chủ động kích hoạt khi cần:
 
 ```text
-User prompt
+                    ┌─ 1. Enrich Context ───────► context_enrichment_agent ──► search_web (Wikipedia + DuckDuckGo)
+                    │
+User Prompt ────────┼─ 2. Run Evaluation ───────► ADK Graph Workflow (Analyzer -> 4 Evaluators -> Join -> Final Reviewer)
+                    │
+                    └─ 3. Validate Result ──────► promptify_validator_agent ─► validate_with_promptify (Playwright)
+```
+
+### Giai đoạn 1: Core Evaluation Workflow (Fan-out / Fan-in)
+
+```text
+User Prompt
     |
     v
-Analyze prompt
+Prompt Analyzer
     |
-    +----------------+----------------+----------------+
-    |                |                |                |
-    v                v                v                v
-Clarity          Context         Constraints      Output format
-evaluator        evaluator       evaluator        evaluator
-    |                |                |                |
-    +----------------+----------------+----------------+
-                             |
-                             v
-                  Synthesize evaluations
-                  and improve the prompt
-                             |
-                             v
-             Evaluation report + improved prompt
+    +--------------+---------------+----------------+----------------+
+    |              |               |                |                | (tùy chọn)
+    v              v               v                v                v
+ Clarity        Context        Constraints      Output Format    Context Enricher
+ Evaluator      Evaluator      Evaluator        Evaluator        (search_public_context)
+    |              |               |                |                |
+    +--------------+---------------+----------------+----------------+
+                                   |
+                                   v
+                                  Join
+                                   |
+                                   v
+                            Final Reviewer
+                                   |
+                                   v
+                       Scores + Improved Prompt
 ```
 
-The implementation should use the ADK 2.x graph-based `Workflow` API. Conceptually, the graph
-is equivalent to:
+- **Bốn Evaluator chạy song song**: Thời gian chạy của cả cụm xấp xỉ với evaluator chậm nhất chứ không phải tổng thời gian của 4 agent.
+- **Ổn định điểm số (Scoring Consistency)**:
+  - Thanh trượt `Temperature` từ `0.0` đến `1.0` (mặc định `0.0` để giảm dao động tối đa).
+  - Rubric chấm điểm chuẩn hóa từ `1` đến `5` cho cả 4 tiêu chí (`Clarity`, `Context`, `Constraints`, `Output Format`).
+  - `overall_score` luôn được Python tính trung bình cộng chính xác từ 4 điểm thành phần, không để LLM tự ước lượng.
 
-```text
-Sequential(analyze, Parallel(evaluators), final_review)
-```
+### Giai đoạn 2: Context Enrichment (Web Search Tool)
 
-`SequentialAgent` and `ParallelAgent` are useful for understanding the pattern, but the ADK
-2.x documentation supersedes these template workflow agents with graph workflows for new
-Python projects.
+- Nút **Enrich context** ngay cạnh **Run evaluation** gọi `context_enrichment_agent` kèm custom tool `search_web(query)` (kết hợp Wikipedia REST API và DuckDuckGo).
+- Trả về:
+  - `missing_context`: những thông tin còn thiếu trong prompt gốc.
+  - `search_query`: câu truy vấn agent đã dùng.
+  - `suggested_context`: danh sách các ý ngữ cảnh gợi ý kèm checkbox.
+  - `sources`: nguồn trích dẫn có tiêu đề và link cụ thể.
+- **Human-in-the-loop**: Không tự ý sửa prompt của người dùng — người dùng tự chọn các ý muốn lấy và bấm **Apply context** để ghép vào trình soạn thảo.
 
-## Repository structure
+### Giai đoạn 3: External Validation với Promptify (Browser Automation Tool)
+
+- Sau khi có `improved_prompt`, khu vực **External Validation** cho phép chọn chủ đề bài thực hành (Lab 1–5) và bấm **Validate with Promptify**.
+- `promptify_validator_agent` gọi tool `validate_with_promptify(prompt, topic)` điều khiển trình duyệt Chromium thông qua **Playwright**:
+  - Lưu session đăng nhập trong thư mục `.promptify_browser_profile/` để không phải đăng nhập lại mỗi lần chạy.
+  - Nếu chưa đăng nhập Google trên [Promptify](https://promptify-wheat-seven.vercel.app/), trình duyệt tự mở màn hình đăng nhập và đợi người dùng xác nhận tài khoản Google (tối đa 90 giây), sau đó **tự động đi tiếp** ngay trong lượt chạy đó.
+  - Tự động điều hướng qua các màn hình của Promptify (**Chọn lớp học** $\rightarrow$ **Lộ trình học** $\rightarrow$ **Màn hình bài thực hành**), bỏ qua popup hướng dẫn, chọn đúng bài Lab, điền `improved_prompt`, bấm **Chấm điểm Prompt** và trích xuất điểm số (`/100`) cùng nhận xét chi tiết về lại giao diện UI.
+
+### Tự động Fallback sang OpenAI khi Gemini quá tải
+
+- Nếu Google Gemini trả lỗi `503 UNAVAILABLE` (high demand), `429 RESOURCE_EXHAUSTED` (rate limit), hoặc treo quá `ADK_EVENT_TIMEOUT_SECONDS`, backend sẽ tự động chuyển toàn bộ lượt chạy sang OpenAI (`OPENAI_MODEL`) qua LiteLLM nếu bạn đã cấu hình `OPENAI_API_KEY`.
+
+---
+
+## Thành phần ADK được sử dụng
+
+| Thành phần | Vai trò trong dự án |
+| --- | --- |
+| `LlmAgent` | Định nghĩa `prompt_analyzer`, 4 evaluator, `final_reviewer`, `context_enrichment_agent`, và `promptify_validator_agent` |
+| `Workflow` | Khai báo đồ thị thực thi fan-out (rẽ nhánh song song) và fan-in (gộp nhánh) |
+| `JoinNode` | Đợi tất cả các nhánh song song hoàn tất trước khi gọi `final_reviewer` |
+| `Runner` | Thực thi agent/workflow và phát luồng sự kiện (`Event`) theo thời gian thực |
+| `Session` | Lưu trữ trạng thái (`session.state`) xuyên suốt một lần chạy |
+| `output_key` | Tự động ghi kết quả structured output của agent vào `session.state` cho bước sau đọc |
+| `output_schema` | Ép đầu ra của từng agent tuân thủ chặt chẽ Pydantic schema |
+| Custom Tools | Các hàm Python (`search_web`, `search_public_context`, `validate_with_promptify`) được ADK tự động đọc chữ ký và docstring để LLM gọi |
+
+---
+
+## Cấu trúc thư mục
 
 ```text
 .
-|-- .env.example
-|-- .gitignore
-|-- pyproject.toml
-|-- README.md
 |-- prompt_improver/
-|   |-- __init__.py
-|   |-- __main__.py    # Enables: python -m prompt_improver
-|   |-- agent.py       # Agent definitions and root workflow
-|   |-- cli.py         # Minimal Runner and in-memory Session example
-|   |-- schemas.py     # Pydantic contracts between workflow steps
-|   `-- callbacks.py   # Optional trace callbacks; no business logic
-`-- tests/
-    |-- test_runner.py  # Local App/Runner/Session smoke test
-    `-- test_schemas.py # Deterministic schema tests
+|   |-- agent.py          # Định nghĩa các LlmAgent và ADK Graph Workflow
+|   |-- schemas.py        # Pydantic schemas (PromptAnalysis, FinalResult, ContextEnrichmentResult, ExternalValidationResult...)
+|   |-- tools.py          # Custom tools: search_web, search_public_context, validate_with_promptify (Playwright)
+|   |-- cli.py            # Chạy thử workflow trực tiếp bằng dòng lệnh (CLI)
+|   `-- callbacks.py      # Telemetry callbacks theo dõi quá trình chạy
+|-- frontend/
+|   |-- src/App.tsx       # Giao diện React + SSE streaming state
+|   |-- src/styles.css    # Giao diện trực quan (Workflow Graph, Inspector, Trace Console)
+|   `-- package.json      # Cấu hình dependencies frontend (Vite + React + TypeScript)
+|-- ui_backend.py         # FastAPI server + SSE streaming cho Evaluate, Enrich, và Validate
+|-- requirements-ui.txt   # Các thư viện bổ sung cho UI backend, LiteLLM và Playwright
+|-- tests/                # Bộ unit tests kiểm tra schemas, tools và workflow
+|-- pyproject.toml        # Cấu hình package Python gốc
+`-- .env.example          # File mẫu cấu hình biến môi trường
 ```
 
-Keeping the whole agent topology in one `agent.py` initially makes the execution flow easier
-to read and explain. Split agents into separate modules only when that file becomes genuinely
-difficult to navigate.
+---
 
-## Intended components
+## Hướng dẫn cài đặt và chạy dự án (Từ A-Z)
 
-| Component | Use in v1 | Responsibility |
-| --- | --- | --- |
-| `LlmAgent` | Yes | Analyze, evaluate, synthesize, and rewrite |
-| `Workflow` | Yes | Define deterministic fan-out/fan-in execution |
-| `Runner` | Yes | Execute the root workflow and expose events |
-| `InMemorySessionService` | Yes | Keep local demo sessions without infrastructure |
-| Session state | Sparingly | Small values needed by callbacks or instruction templates |
-| Node output | Yes | Primary way to pass data between graph nodes |
-| `output_key` | Not initially | Mainly useful in the classic template-workflow variant |
-| Callback | Optional | Log agent/model boundaries for learning and debugging |
-| Tools, memory, database | No | Outside the scope of the first version |
+### Yêu cầu hệ thống
 
-## Output contracts
+- **Python 3.11+**
+- **Node.js 20+**
+- **Google Gemini API Key** (lấy miễn phí tại [Google AI Studio](https://aistudio.google.com/))
+- **OpenAI API Key** *(tùy chọn, khuyên dùng để tự động dự phòng khi server Gemini bị quá tải 503)*
 
-Implement these contracts in `schemas.py` before writing agent instructions:
+### Bước 1: Clone repo và cài đặt môi trường Python
 
-### `PromptAnalysis`
-
-- `inferred_goal`
-- `target_audience`
-- `detected_context`
-- `detected_constraints`
-- `requested_output_format`
-- `missing_information`
-
-### `CriterionEvaluation`
-
-- `criterion`
-- `score` from 1 to 5
-- up to three `findings`
-- up to three `suggestions`
-
-All four evaluators should return the same schema. The criterion name distinguishes their
-results.
-
-### `FinalResult`
-
-- `overall_score`
-- `summary`
-- `evaluations`
-- `improved_prompt`
-- `assumptions`
-
-The final reviewer owns the rewrite. Individual evaluators should critique only their assigned
-criterion and should not produce competing rewritten prompts.
-
-## Implementation plan
-
-Implement and verify one vertical slice at a time.
-
-### Step 1: prepare the environment
-
-1. Create a virtual environment.
-2. Install the project in editable mode with development dependencies.
-3. Copy `.env.example` to `.env` and set either `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
-4. Confirm that a one-agent ADK hello-world invocation works before building the workflow.
-
-PowerShell example:
+Mở **PowerShell** tại thư mục bạn muốn lưu dự án:
 
 ```powershell
+git clone https://github.com/ElysiaTheElysier/Google_ADK_Demos.git
+cd Google_ADK_Demos
+
+# Tạo môi trường ảo (virtual environment)
 python -m venv .venv
+
+# Kích hoạt môi trường ảo
+# (Nếu PowerShell báo lỗi chặn script, chạy lệnh dưới trước):
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
+
+# Cài đặt các thư viện Python và trình duyệt Chromium cho Playwright
+python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+python -m pip install -r requirements-ui.txt
+playwright install chromium
+```
+
+### Bước 2: Cấu hình file `.env`
+
+Tạo file `.env` từ file mẫu `.env.example`:
+
+```powershell
 Copy-Item .env.example .env
 ```
 
-Before installation, check the currently released `google-adk` version and update the bounded
-dependency in `pyproject.toml` if the project is no longer on ADK 2.x.
+Mở file `.env` và điền API key của bạn:
 
-### Step 2: define schemas
+```env
+# Bắt buộc: Google AI Studio API Key
+GOOGLE_API_KEY=your-google-api-key
+GOOGLE_GENAI_USE_VERTEXAI=FALSE
+ADK_MODEL=gemini-3.5-flash-lite
 
-Add the three Pydantic models described above. Write fast tests for score boundaries and
-required fields. This provides stable contracts before prompts and orchestration are added.
+# Tùy chọn: Tự động chuyển sang OpenAI khi Gemini bị quá tải (503/429) hoặc timeout
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=openai/gpt-4.1-mini
+ADK_EVENT_TIMEOUT_SECONDS=60
 
-Status: implemented.
-
-### Step 3: implement one analyzer
-
-Create one `LlmAgent` that accepts the original prompt and returns `PromptAnalysis`. Run it by
-itself and inspect both the final event and parsed structured output.
-
-Status: implemented as part of the complete workflow. After configuring `.env`, run:
-
-```powershell
-python -m prompt_improver "Giải thích Google Agent Development Kit cho lập trình viên mới"
+# URL ứng dụng Promptify cho tính năng Validate ở Giai đoạn 3
+PROMPTIFY_URL=https://promptify-wheat-seven.vercel.app/
 ```
 
-### Step 4: implement one evaluator
+### Bước 3: Cài đặt thư viện cho Frontend
 
-Start with clarity. It should receive the original prompt plus `PromptAnalysis`, return
-`CriterionEvaluation`, and never rewrite the prompt. Verify this sequential path before adding
-parallelism.
+```powershell
+cd frontend
+npm install
+cd ..
+```
 
-### Step 5: add the remaining evaluators
+### Bước 4: Khởi chạy hệ thống (Backend + Frontend)
 
-Use the same output contract for context, constraints, and output format. Keep instructions
-short and criterion-specific.
+Bạn mở **2 cửa sổ terminal PowerShell** song song:
 
-Status: implemented.
+**Terminal 1 — Chạy Backend (cổng `8000`):**
 
-### Step 6: compose fan-out and fan-in
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+.\.venv\Scripts\uvicorn.exe ui_backend:app --reload --host 127.0.0.1 --port 8000
+```
 
-Build the ADK graph so all evaluator nodes depend on the analyzer and the final reviewer depends
-on all evaluator branches. Do not have parallel branches write to the same state key.
+*(Kiểm tra nhanh tại `http://localhost:8000/api/health` sẽ thấy `{"status":"ok"}`)*
 
-Status: implemented with `Workflow` and `JoinNode`.
+**Terminal 2 — Chạy Frontend (cổng `5173`):**
 
-### Step 7: add the final reviewer
+```powershell
+cd frontend
+npm run dev
+```
 
-The final reviewer receives the original prompt, analysis, and all evaluations. It returns one
-`FinalResult`, preserving user intent and making missing information explicit as assumptions or
-placeholders.
+Sau đó mở trình duyệt tại địa chỉ: **[http://localhost:5173](http://localhost:5173)**
 
-Status: implemented.
+---
 
-### Step 8: expose execution through Runner
+## Cách sử dụng nhanh trên giao diện Web
 
-Use one `Runner` with `InMemorySessionService`. Create a fresh session ID per demo run and print
-events with their author/node name so the execution order is visible.
+1. **Bước 1 — Nhập & Làm giàu ngữ cảnh (Build Prompt)**:
+   - Nhập một câu prompt bất kỳ (hoặc chọn các nút **Sample** có sẵn).
+   - Bấm **Enrich context** để Agent tự tìm thông tin thực tế trên Wikipedia/Web. Tích chọn các ý bạn muốn thêm rồi bấm **Apply context**.
+2. **Bước 2 — Đánh giá & Cải thiện (Evaluate Prompt)**:
+   - Chọn mức `Temperature` (nên để `0.0` để điểm ổn định nhất) và bấm **Run evaluation**.
+   - Quan sát đồ thị **Workflow Inspector** sáng đèn theo thời gian thực. Bấm vào từng node để xem Input/Output JSON, thời gian chạy và lượng token tiêu thụ.
+   - Xem điểm tổng kết và bản **Improved Prompt** ở khung kết quả.
+3. **Bước 3 — Kiểm thử chéo với Promptify (External Validation)**:
+   - Sau khi đã có **Improved Prompt**, kéo xuống mục **External Validation**, chọn bài Lab tương ứng và bấm **Validate with Promptify**.
+   - Lần đầu tiên chạy, một cửa sổ Chromium sẽ bật lên: bạn chỉ cần đăng nhập tài khoản Google trên trang Promptify. Ngay sau khi đăng nhập xong, Agent sẽ tự động vào lớp học, mở bài thực hành, dán prompt đã cải thiện, bấm chấm điểm và mang kết quả điểm (`/100`) + nhận xét về lại trang web của bạn.
 
-Start with `adk run` or `adk web`. Do not add FastAPI or a custom UI yet.
+---
 
-### Step 9: add minimal tracing
+## Chạy thử bằng CLI hoặc chạy Kiểm thử (Unit Tests)
 
-First use Runner events. Only then add a small callback that records start/end boundaries or
-timings. Keep evaluation and routing logic out of callbacks.
+Chạy đánh giá nhanh qua dòng lệnh (không cần bật UI):
 
-### Step 10: create three manual examples
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+.\.venv\Scripts\python.exe -m prompt_improver "Giải thích Google ADK cho một lập trình viên mới"
+```
 
-Include:
+Chạy bộ kiểm thử tự động (`pytest`) và kiểm tra code style (`ruff`):
 
-1. A vague prompt with almost no context.
-2. A prompt with good context but no output format.
-3. An already strong prompt that should change only slightly.
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+.\.venv\Scripts\ruff.exe check .
+.\.venv\Scripts\pytest.exe -q
+```
 
-These cases are enough to explain expected behavior without introducing a full evaluation
-dataset.
+---
 
-## Definition of done for v1
+## Xử lý sự cố thường gặp (Troubleshooting)
 
-- One text prompt can be submitted locally.
-- The analyzer returns validated structured output.
-- Four independent evaluators run as fan-out branches.
-- The final reviewer runs only after all four branches complete.
-- The response contains concise scores, findings, and one improved prompt.
-- Runtime events make execution order visible.
-- Restarting the application may discard sessions by design.
-- The README includes one reproducible example.
+- **Lỗi `503 UNAVAILABLE (currently experiencing high demand)` từ Google Gemini**:
+  - Đây là lỗi phía máy chủ miễn phí của Google khi có nhiều người truy cập cùng lúc. Bạn chỉ cần điền thêm `OPENAI_API_KEY` vào file `.env`, hệ thống sẽ tự động chuyển sang OpenAI ngay lập tức mà không làm gián đoạn quá trình chạy.
+- **Lỡ tay đóng cửa sổ trình duyệt Promptify khi đang chạy**:
+  - Không sao cả! Hệ thống tự động phát hiện cửa sổ đã đóng, dọn dẹp khóa profile (`SingletonLock`) và mở lại cửa sổ mới ở lần bấm **Validate with Promptify** tiếp theo.
+- **Giao diện không cập nhật sau khi sửa code**:
+  - Nhấn tổ hợp phím `Ctrl + Shift + R` trên trình duyệt để xóa cache cũ.
 
-## Deliberately out of scope
+---
 
-- Promptify integration
-- A custom frontend or API server
-- Persistent sessions or a database
-- Long-term memory, RAG, or web search
-- Dynamic evaluator selection
-- Automatic multi-pass improvement loops
-- Human approval workflows
-- Multiple model comparison
-- Cloud deployment
-- External observability services
-- Production security, tenancy, and authentication
-- A full benchmark or calibrated scoring system
+## Tài liệu tham khảo
 
-The evaluator scores are LLM-as-judge signals, not objective measurements. The first version is
-primarily a demonstration of ADK orchestration and structured agent collaboration.
-
-## Useful ADK references
-
-- [Graph-based workflows](https://adk.dev/graphs/)
-- [Workflow data handling](https://adk.dev/graphs/data-handling/)
-- [LlmAgent](https://adk.dev/agents/llm-agents/)
-- [Runner and runtime](https://adk.dev/runtime/)
-- [Sessions and state](https://adk.dev/sessions/)
-- [Callbacks](https://adk.dev/callbacks/)
+- [Google ADK Documentation](https://adk.dev/)
+- [ADK Graph Workflows](https://adk.dev/graphs/)
+- [ADK Runtime & Runner](https://adk.dev/runtime/)
+- [ADK Sessions & State](https://adk.dev/sessions/)
+- [ADK LiteLLM Connector](https://adk.dev/agents/models/litellm/)

@@ -3,7 +3,14 @@
 import pytest
 from pydantic import ValidationError
 
-from prompt_improver.schemas import CriterionEvaluation, FinalResult, PromptAnalysis
+from prompt_improver.schemas import (
+    ContextEnrichment,
+    ContextSource,
+    CriterionEvaluation,
+    ExternalValidationResult,
+    FinalResult,
+    PromptAnalysis,
+)
 
 
 def test_prompt_analysis_defaults_optional_information() -> None:
@@ -49,6 +56,33 @@ def test_criterion_evaluation_limits_findings_to_three() -> None:
         )
 
 
+def test_context_enrichment_requires_sources_when_search_is_used() -> None:
+    with pytest.raises(ValidationError):
+        ContextEnrichment(
+            used_search=True,
+            search_query="Retrieval-augmented generation",
+            useful_context=["RAG combines retrieval with generation."],
+            sources=[],
+            note="Searched public context.",
+        )
+
+    valid = ContextEnrichment(
+        used_search=True,
+        search_query="Retrieval-augmented generation",
+        useful_context=["RAG combines retrieval with generation."],
+        sources=[
+            ContextSource(
+                title="Retrieval-augmented generation",
+                url="https://en.wikipedia.org/wiki/Retrieval-augmented_generation",
+                fact="RAG combines retrieval with generation.",
+            )
+        ],
+        note="Searched public context.",
+    )
+    assert valid.used_search is True
+    assert len(valid.sources) == 1
+
+
 def test_final_result_serialization_round_trip() -> None:
     evaluations = [
         CriterionEvaluation(
@@ -69,3 +103,26 @@ def test_final_result_serialization_round_trip() -> None:
     restored = FinalResult.model_validate_json(result.model_dump_json())
 
     assert restored == result
+    assert restored.overall_score == 3.0
+
+
+def test_external_validation_result_schema() -> None:
+    completed = ExternalValidationResult(
+        status="completed",
+        submitted_prompt="Explain RAG to a junior engineer.",
+        topic="Giải thích một khái niệm kỹ thuật cho người mới",
+        score=8.5,
+        feedback=["Good structure.", "Clear target audience."],
+        result_url="https://promptify-wheat-seven.vercel.app/",
+    )
+    assert completed.score == 8.5
+
+    login_needed = ExternalValidationResult(
+        status="login_required",
+        submitted_prompt="Explain RAG to a junior engineer.",
+        topic="Giải thích một khái niệm kỹ thuật cho người mới",
+        score=None,
+        feedback=["Complete Google login in the opened browser window."],
+        result_url="https://promptify-wheat-seven.vercel.app/",
+    )
+    assert login_needed.score is None

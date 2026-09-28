@@ -2,16 +2,10 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
-class StrictModel(BaseModel):
-    """Base class that rejects fields outside the documented contract."""
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class PromptAnalysis(StrictModel):
+class PromptAnalysis(BaseModel):
     """A factual inventory of information present in the user's prompt."""
 
     inferred_goal: str = Field(min_length=1)
@@ -22,7 +16,7 @@ class PromptAnalysis(StrictModel):
     missing_information: list[str] = Field(default_factory=list)
 
 
-class CriterionEvaluation(StrictModel):
+class CriterionEvaluation(BaseModel):
     """The result produced by one specialized evaluator."""
 
     criterion: Literal["clarity", "context", "constraints", "output_format"]
@@ -31,7 +25,7 @@ class CriterionEvaluation(StrictModel):
     suggestions: list[str] = Field(default_factory=list, max_length=3)
 
 
-class FinalResult(StrictModel):
+class FinalResult(BaseModel):
     """The final report produced after all evaluator branches finish."""
 
     overall_score: float = Field(ge=1, le=5)

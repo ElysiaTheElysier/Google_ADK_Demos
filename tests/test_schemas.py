@@ -64,8 +64,3 @@ def test_final_result_serialization_round_trip() -> None:
     restored = FinalResult.model_validate_json(result.model_dump_json())
 
     assert restored == result
-
-
-def test_models_reject_unknown_fields() -> None:
-    with pytest.raises(ValidationError):
-        PromptAnalysis(inferred_goal="Explain ADK", unexpected="not allowed")

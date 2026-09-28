@@ -132,7 +132,7 @@ Implement and verify one vertical slice at a time.
 
 1. Create a virtual environment.
 2. Install the project in editable mode with development dependencies.
-3. Copy `.env.example` to `.env` and set `GOOGLE_API_KEY`.
+3. Copy `.env.example` to `.env` and set either `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
 4. Confirm that a one-agent ADK hello-world invocation works before building the workflow.
 
 PowerShell example:

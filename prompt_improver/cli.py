@@ -21,10 +21,11 @@ def _ensure_authentication() -> None:
     """Fail early with an actionable message instead of a model-client error."""
 
     uses_vertex_ai = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
-    if not uses_vertex_ai and not os.getenv("GOOGLE_API_KEY"):
+    has_api_key = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+    if not uses_vertex_ai and not has_api_key:
         raise RuntimeError(
-            "Missing GOOGLE_API_KEY. Copy .env.example to .env and add your key, "
-            "or configure Vertex AI authentication."
+            "Missing GOOGLE_API_KEY or GEMINI_API_KEY. Copy .env.example to .env and "
+            "add your key, or configure Vertex AI authentication."
         )
 
 
